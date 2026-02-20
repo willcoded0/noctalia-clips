@@ -85,6 +85,7 @@ Item {
             // ── Game filter chips ──────────────────────────────────────────
             Flow {
                 Layout.fillWidth: true
+                width: parent.width
                 spacing: Style.marginXS
                 visible: root.uniqueGames.length > 0
 
@@ -157,7 +158,7 @@ Item {
                     }
 
                     NText {
-                        text: root.gameFilter ? "No clips for "" + root.gameFilter + """ : "No clips yet"
+                        text: root.gameFilter ? "No clips for \u201c" + root.gameFilter + "\u201d" : "No clips yet"
                         pointSize: Style.fontSizeL
                         color: Color.mOnSurfaceVariant
                         Layout.alignment: Qt.AlignHCenter
