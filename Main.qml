@@ -45,6 +45,12 @@ Item {
         Quickshell.execDetached(["xdg-open", root.clipsFolder])
     }
 
+    function copyClip(path) {
+        // Copies the file path as plain text to the Wayland clipboard
+        Quickshell.execDetached(["sh", "-c",
+            "printf '%s' " + shellEscape(path) + " | wl-copy"])
+    }
+
     function deleteClip(path) {
         deleteProc.command = ["rm", "--", path]
         deleteProc.running = true

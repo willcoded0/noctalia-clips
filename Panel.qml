@@ -15,6 +15,26 @@ Item {
     property real contentPreferredWidth: 480 * Style.uiScaleRatio
     property real contentPreferredHeight: 620 * Style.uiScaleRatio
 
+    // ── Filter state ──────────────────────────────────────────────────────────
+    property string gameFilter: ""
+
+    readonly property var uniqueGames: {
+        var meta = root.pluginApi?.mainInstance?.clipMeta ?? {}
+        var seen = {}
+        var result = []
+        Object.values(meta).forEach(g => {
+            if (g && !seen[g]) { seen[g] = true; result.push(g) }
+        })
+        return result.sort()
+    }
+
+    readonly property var filteredClips: {
+        var clips = root.pluginApi?.mainInstance?.clips ?? []
+        if (!root.gameFilter) return clips
+        var meta = root.pluginApi?.mainInstance?.clipMeta ?? {}
+        return clips.filter(c => (meta[c] ?? "") === root.gameFilter)
+    }
+
     anchors.fill: parent
 
     Rectangle {
@@ -62,6 +82,62 @@ Item {
 
             NDivider { Layout.fillWidth: true }
 
+            // ── Game filter chips ──────────────────────────────────────────
+            Flow {
+                Layout.fillWidth: true
+                spacing: Style.marginXS
+                visible: root.uniqueGames.length > 0
+
+                // "All" chip
+                Rectangle {
+                    radius: Style.radiusS
+                    color: root.gameFilter === "" ? Color.mPrimary : Color.mSurfaceVariant
+                    implicitWidth: allLabel.implicitWidth + Style.marginS * 2
+                    implicitHeight: allLabel.implicitHeight + Style.marginXS * 2
+
+                    NText {
+                        id: allLabel
+                        anchors.centerIn: parent
+                        text: "All"
+                        pointSize: Style.fontSizeXS
+                        color: root.gameFilter === "" ? Color.mOnPrimary : Color.mOnSurface
+                        font.weight: Style.fontWeightSemiBold
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.gameFilter = ""
+                    }
+                }
+
+                Repeater {
+                    model: root.uniqueGames
+                    delegate: Rectangle {
+                        required property string modelData
+                        radius: Style.radiusS
+                        color: root.gameFilter === modelData ? Color.mPrimary : Color.mSurfaceVariant
+                        implicitWidth: chipLabel.implicitWidth + Style.marginS * 2
+                        implicitHeight: chipLabel.implicitHeight + Style.marginXS * 2
+
+                        NText {
+                            id: chipLabel
+                            anchors.centerIn: parent
+                            text: modelData
+                            pointSize: Style.fontSizeXS
+                            color: root.gameFilter === modelData ? Color.mOnPrimary : Color.mOnSurface
+                            font.weight: Style.fontWeightSemiBold
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.gameFilter = (root.gameFilter === modelData ? "" : modelData)
+                        }
+                    }
+                }
+            }
+
             // ── Content ──────────────────────────────────────────────────────
             Item {
                 Layout.fillWidth: true
@@ -70,7 +146,7 @@ Item {
                 // Empty state
                 ColumnLayout {
                     anchors.centerIn: parent
-                    visible: (root.pluginApi?.mainInstance?.clips?.length ?? 0) === 0
+                    visible: root.filteredClips.length === 0
                     spacing: Style.marginM
 
                     NIcon {
@@ -81,7 +157,7 @@ Item {
                     }
 
                     NText {
-                        text: "No clips yet"
+                        text: root.gameFilter ? "No clips for "" + root.gameFilter + """ : "No clips yet"
                         pointSize: Style.fontSizeL
                         color: Color.mOnSurfaceVariant
                         Layout.alignment: Qt.AlignHCenter
@@ -93,6 +169,7 @@ Item {
                         color: Color.mOnSurfaceVariant
                         Layout.alignment: Qt.AlignHCenter
                         horizontalAlignment: Text.AlignHCenter
+                        visible: !root.gameFilter
                     }
                 }
 
@@ -100,14 +177,14 @@ Item {
                 NScrollView {
                     id: scrollView
                     anchors.fill: parent
-                    visible: (root.pluginApi?.mainInstance?.clips?.length ?? 0) > 0
+                    visible: root.filteredClips.length > 0
 
                     Column {
                         width: scrollView.width
                         spacing: Style.marginXS
 
                         Repeater {
-                            model: root.pluginApi?.mainInstance?.clips ?? []
+                            model: root.filteredClips
 
                             delegate: Item {
                                 id: clipItem
@@ -130,12 +207,15 @@ Item {
                                     id: clipMenu
                                     model: [
                                         { "label": "Open",   "action": "open",   "icon": "media-play" },
+                                        { "label": "Copy path", "action": "copy", "icon": "edit-copy" },
                                         { "label": "Delete", "action": "delete", "icon": "trash"      }
                                     ]
                                     onTriggered: action => {
                                         clipMenu.close()
                                         if (action === "open")
                                             root.pluginApi?.mainInstance?.openClip(clipItem.filePath)
+                                        else if (action === "copy")
+                                            root.pluginApi?.mainInstance?.copyClip(clipItem.filePath)
                                         else if (action === "delete")
                                             root.pluginApi?.mainInstance?.deleteClip(clipItem.filePath)
                                     }
@@ -222,11 +302,21 @@ Item {
                                             }
                                         }
 
-                                        // Open button
-                                        NIconButton {
-                                            icon: "media-play"
-                                            tooltipText: "Open"
-                                            onClicked: root.pluginApi?.mainInstance?.openClip(clipItem.filePath)
+                                        // Action buttons
+                                        RowLayout {
+                                            spacing: 0
+
+                                            NIconButton {
+                                                icon: "edit-copy"
+                                                tooltipText: "Copy path"
+                                                onClicked: root.pluginApi?.mainInstance?.copyClip(clipItem.filePath)
+                                            }
+
+                                            NIconButton {
+                                                icon: "media-play"
+                                                tooltipText: "Open"
+                                                onClicked: root.pluginApi?.mainInstance?.openClip(clipItem.filePath)
+                                            }
                                         }
                                     }
                                 }
