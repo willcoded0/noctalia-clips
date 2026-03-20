@@ -1,5 +1,7 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
+import QtMultimedia
 import Quickshell
 import qs.Commons
 import qs.Widgets
@@ -12,11 +14,14 @@ Item {
 
     readonly property var geometryPlaceholder: panelContainer
     readonly property bool allowAttach: true
-    property real contentPreferredWidth: 480 * Style.uiScaleRatio
-    property real contentPreferredHeight: 620 * Style.uiScaleRatio
+    property real contentPreferredWidth: 600 * Style.uiScaleRatio
+    property real contentPreferredHeight: 680 * Style.uiScaleRatio
 
-    // ── Filter state ──────────────────────────────────────────────────────────
+    // ── Filter / sort state ────────────────────────────────────────────────────
     property string gameFilter: ""
+    property string sortOrder: "newest"   // "newest"|"oldest"|"game"|"favorites"
+    property string hoveredClipPath: ""
+    property int previewY: 0
 
     readonly property var uniqueGames: {
         var meta = root.pluginApi?.mainInstance?.clipMeta ?? {}
@@ -30,9 +35,39 @@ Item {
 
     readonly property var filteredClips: {
         var clips = root.pluginApi?.mainInstance?.clips ?? []
-        if (!root.gameFilter) return clips
-        var meta = root.pluginApi?.mainInstance?.clipMeta ?? {}
-        return clips.filter(c => (meta[c] ?? "") === root.gameFilter)
+        var meta  = root.pluginApi?.mainInstance?.clipMeta ?? {}
+        var favs  = root.pluginApi?.mainInstance?.clipFavorites ?? []
+
+        // Filter
+        var filtered
+        if (root.gameFilter === "__favorites__") {
+            filtered = clips.filter(c => favs.indexOf(c) >= 0)
+        } else if (root.gameFilter) {
+            filtered = clips.filter(c => (meta[c] ?? "") === root.gameFilter)
+        } else {
+            filtered = clips.slice()
+        }
+
+        // Sort
+        if (root.sortOrder === "oldest") {
+            return filtered.slice().reverse()
+        } else if (root.sortOrder === "game") {
+            return filtered.slice().sort((a, b) => {
+                var ga = (meta[a] ?? "").toLowerCase()
+                var gb = (meta[b] ?? "").toLowerCase()
+                return ga < gb ? -1 : ga > gb ? 1 : 0
+            })
+        } else if (root.sortOrder === "favorites") {
+            return filtered.slice().sort((a, b) => {
+                var fa = favs.indexOf(a) >= 0
+                var fb = favs.indexOf(b) >= 0
+                if (fa && !fb) return -1
+                if (!fa && fb) return 1
+                return 0
+            })
+        }
+        // "newest" — already newest-first from scan
+        return filtered
     }
 
     anchors.fill: parent
@@ -82,12 +117,49 @@ Item {
 
             NDivider { Layout.fillWidth: true }
 
+            // ── Sort chips ─────────────────────────────────────────────────
+            Flow {
+                Layout.fillWidth: true
+                spacing: Style.marginXS
+
+                Repeater {
+                    model: [
+                        { "label": "Newest",         "value": "newest"    },
+                        { "label": "Oldest",         "value": "oldest"    },
+                        { "label": "By Game",        "value": "game"      },
+                        { "label": "Favorites First","value": "favorites" }
+                    ]
+                    delegate: Rectangle {
+                        required property var modelData
+                        radius: Style.radiusS
+                        color: root.sortOrder === modelData.value ? Color.mPrimary : Color.mSurfaceVariant
+                        implicitWidth: sortChipLabel.implicitWidth + Style.marginS * 2
+                        implicitHeight: sortChipLabel.implicitHeight + Style.marginXS * 2
+
+                        NText {
+                            id: sortChipLabel
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            pointSize: Style.fontSizeXS
+                            color: root.sortOrder === modelData.value ? Color.mOnPrimary : Color.mOnSurface
+                            font.weight: Style.fontWeightSemiBold
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.sortOrder = modelData.value
+                        }
+                    }
+                }
+            }
+
             // ── Game filter chips ──────────────────────────────────────────
             Flow {
                 Layout.fillWidth: true
-                width: parent.width
                 spacing: Style.marginXS
                 visible: root.uniqueGames.length > 0
+                         || (root.pluginApi?.mainInstance?.clipFavorites ?? []).length > 0
 
                 // "All" chip
                 Rectangle {
@@ -109,6 +181,29 @@ Item {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
                         onClicked: root.gameFilter = ""
+                    }
+                }
+
+                // "Favorites ★" chip
+                Rectangle {
+                    radius: Style.radiusS
+                    color: root.gameFilter === "__favorites__" ? Color.mPrimary : Color.mSurfaceVariant
+                    implicitWidth: favsFilterLabel.implicitWidth + Style.marginS * 2
+                    implicitHeight: favsFilterLabel.implicitHeight + Style.marginXS * 2
+
+                    NText {
+                        id: favsFilterLabel
+                        anchors.centerIn: parent
+                        text: "Favorites \u2605"
+                        pointSize: Style.fontSizeXS
+                        color: root.gameFilter === "__favorites__" ? Color.mOnPrimary : Color.mOnSurface
+                        font.weight: Style.fontWeightSemiBold
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.gameFilter = (root.gameFilter === "__favorites__" ? "" : "__favorites__")
                     }
                 }
 
@@ -158,7 +253,11 @@ Item {
                     }
 
                     NText {
-                        text: root.gameFilter ? "No clips for \u201c" + root.gameFilter + "\u201d" : "No clips yet"
+                        text: root.gameFilter === "__favorites__"
+                              ? "No favorites yet"
+                              : root.gameFilter
+                                ? "No clips for \u201c" + root.gameFilter + "\u201d"
+                                : "No clips yet"
                         pointSize: Style.fontSizeL
                         color: Color.mOnSurfaceVariant
                         Layout.alignment: Qt.AlignHCenter
@@ -192,9 +291,14 @@ Item {
                                 width: scrollView.width
                                 height: 88 * Style.uiScaleRatio
 
+                                property bool renaming: false
+
                                 readonly property string filePath: modelData
                                 readonly property string fileName: modelData.split("/").pop()
+                                readonly property string fileNameNoExt: fileName.replace(/\.mp4$/i, "")
                                 readonly property string game: (root.pluginApi?.mainInstance?.clipMeta ?? {})[modelData] ?? ""
+                                readonly property bool clipFavorite: (root.pluginApi?.mainInstance?.clipFavorites ?? []).indexOf(modelData) >= 0
+                                readonly property string duration: (root.pluginApi?.mainInstance?.clipDurations ?? {})[modelData] ?? ""
                                 readonly property string dateStr: {
                                     var m = fileName.match(/(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/)
                                     if (!m) return ""
@@ -204,12 +308,24 @@ Item {
                                     return m[1] + "  " + h + ":" + min + ":" + sec + " " + ampm
                                 }
 
+                                function confirmRename() {
+                                    var n = renameField.text.trim()
+                                    if (n) {
+                                        root.pluginApi?.mainInstance?.renameClip(clipItem.filePath, n + ".mp4")
+                                        clipItem.renaming = false
+                                    }
+                                }
+
                                 NPopupContextMenu {
                                     id: clipMenu
                                     model: [
-                                        { "label": "Open",   "action": "open",   "icon": "media-play" },
-                                        { "label": "Copy path", "action": "copy", "icon": "edit-copy" },
-                                        { "label": "Delete", "action": "delete", "icon": "trash"      }
+                                        { "label": "Open",      "action": "open",     "icon": "media-play" },
+                                        { "label": "Copy",      "action": "copy",     "icon": "copy"       },
+                                        { "label": clipItem.clipFavorite ? "Unfavorite" : "Favorite",
+                                          "action": "favorite", "icon": "star"                             },
+                                        { "label": "Rename",    "action": "rename",   "icon": "edit"       },
+                                        { "label": "Trim",      "action": "trim",     "icon": "scissors"   },
+                                        { "label": "Delete",    "action": "delete",   "icon": "trash"      }
                                     ]
                                     onTriggered: action => {
                                         clipMenu.close()
@@ -217,6 +333,12 @@ Item {
                                             root.pluginApi?.mainInstance?.openClip(clipItem.filePath)
                                         else if (action === "copy")
                                             root.pluginApi?.mainInstance?.copyClip(clipItem.filePath)
+                                        else if (action === "favorite")
+                                            root.pluginApi?.mainInstance?.toggleFavorite(clipItem.filePath)
+                                        else if (action === "rename")
+                                            clipItem.renaming = true
+                                        else if (action === "trim")
+                                            root.pluginApi?.mainInstance?.trimClip(clipItem.filePath)
                                         else if (action === "delete")
                                             root.pluginApi?.mainInstance?.deleteClip(clipItem.filePath)
                                     }
@@ -233,10 +355,22 @@ Item {
                                         hoverEnabled: true
                                         acceptedButtons: Qt.LeftButton | Qt.RightButton
                                         onClicked: mouse => {
+                                            if (clipItem.renaming) return
                                             if (mouse.button === Qt.LeftButton)
                                                 root.pluginApi?.mainInstance?.openClip(clipItem.filePath)
                                             else if (mouse.button === Qt.RightButton)
                                                 PanelService.showContextMenu(clipMenu, clipItem, root.pluginApi?.panelOpenScreen)
+                                        }
+                                        onEntered: {
+                                            root.hoveredClipPath = clipItem.filePath
+                                            var pos = clipItem.mapToItem(panelContainer, 0, clipItem.height / 2)
+                                            root.previewY = Math.max(0, Math.min(
+                                                pos.y - 90,
+                                                panelContainer.height - 180))
+                                        }
+                                        onExited: {
+                                            if (root.hoveredClipPath === clipItem.filePath)
+                                                root.hoveredClipPath = ""
                                         }
                                     }
 
@@ -288,18 +422,63 @@ Item {
                                                 }
                                             }
 
+                                            // Filename — hidden when renaming
                                             NText {
+                                                visible: !clipItem.renaming
                                                 text: clipItem.fileName
                                                 pointSize: Style.fontSizeS
                                                 Layout.fillWidth: true
                                                 elide: Text.ElideRight
                                             }
 
-                                            NText {
-                                                text: clipItem.dateStr
-                                                pointSize: Style.fontSizeXS
-                                                color: Color.mOnSurfaceVariant
-                                                visible: clipItem.dateStr !== ""
+                                            // Rename field — shown when renaming
+                                            TextField {
+                                                id: renameField
+                                                visible: clipItem.renaming
+                                                Layout.fillWidth: true
+                                                text: clipItem.fileNameNoExt
+                                                color: Color.mOnSurface
+                                                placeholderTextColor: Qt.alpha(Color.mOnSurfaceVariant, 0.6)
+                                                selectByMouse: true
+                                                topPadding: 2
+                                                bottomPadding: 2
+                                                leftPadding: Style.marginXS
+                                                rightPadding: Style.marginXS
+                                                font.family: Settings.data.ui.fontDefault
+                                                font.pointSize: Style.fontSizeS * Style.uiScaleRatio
+                                                font.weight: Style.fontWeightRegular
+                                                background: Rectangle {
+                                                    color: Color.mSurfaceVariant
+                                                    radius: Style.radiusXS
+                                                }
+                                                Keys.onReturnPressed: clipItem.confirmRename()
+                                                Keys.onEscapePressed: clipItem.renaming = false
+                                                onVisibleChanged: {
+                                                    if (visible) Qt.callLater(function() {
+                                                        renameField.forceActiveFocus()
+                                                        renameField.selectAll()
+                                                    })
+                                                }
+                                            }
+
+                                            // Date and duration row (hidden when renaming)
+                                            RowLayout {
+                                                visible: !clipItem.renaming
+                                                spacing: Style.marginS
+
+                                                NText {
+                                                    text: clipItem.dateStr
+                                                    pointSize: Style.fontSizeXS
+                                                    color: Color.mOnSurfaceVariant
+                                                    visible: clipItem.dateStr !== ""
+                                                }
+
+                                                NText {
+                                                    text: clipItem.duration
+                                                    pointSize: Style.fontSizeXS
+                                                    color: Color.mOnSurfaceVariant
+                                                    visible: clipItem.duration !== ""
+                                                }
                                             }
                                         }
 
@@ -307,16 +486,55 @@ Item {
                                         RowLayout {
                                             spacing: 0
 
+                                            // Normal-mode buttons
                                             NIconButton {
-                                                icon: "edit-copy"
-                                                tooltipText: "Copy path"
+                                                visible: !clipItem.renaming
+                                                icon: clipItem.clipFavorite ? "star-filled" : "star"
+                                                tooltipText: clipItem.clipFavorite ? "Unfavorite" : "Favorite"
+                                                onClicked: root.pluginApi?.mainInstance?.toggleFavorite(clipItem.filePath)
+                                            }
+
+                                            NIconButton {
+                                                visible: !clipItem.renaming
+                                                icon: "copy"
+                                                tooltipText: "Copy"
                                                 onClicked: root.pluginApi?.mainInstance?.copyClip(clipItem.filePath)
                                             }
 
                                             NIconButton {
+                                                visible: !clipItem.renaming
                                                 icon: "media-play"
                                                 tooltipText: "Open"
                                                 onClicked: root.pluginApi?.mainInstance?.openClip(clipItem.filePath)
+                                            }
+
+                                            NIconButton {
+                                                visible: !clipItem.renaming
+                                                icon: "edit"
+                                                tooltipText: "Rename"
+                                                onClicked: clipItem.renaming = true
+                                            }
+
+                                            NIconButton {
+                                                visible: !clipItem.renaming && hoverArea.containsMouse
+                                                icon: "scissors"
+                                                tooltipText: "Trim"
+                                                onClicked: root.pluginApi?.mainInstance?.trimClip(clipItem.filePath)
+                                            }
+
+                                            // Rename-mode buttons
+                                            NIconButton {
+                                                visible: clipItem.renaming
+                                                icon: "check"
+                                                tooltipText: "Confirm rename"
+                                                onClicked: clipItem.confirmRename()
+                                            }
+
+                                            NIconButton {
+                                                visible: clipItem.renaming
+                                                icon: "close"
+                                                tooltipText: "Cancel"
+                                                onClicked: clipItem.renaming = false
                                             }
                                         }
                                     }
@@ -325,6 +543,50 @@ Item {
                         }
                     }
                 }
+            }
+        }
+
+        // ── Hover preview popup (live video) ──────────────────────────────────
+        Rectangle {
+            id: previewPopup
+            visible: root.hoveredClipPath !== ""
+            x: panelContainer.width + 8
+            y: root.previewY
+            width: 320
+            height: 180
+            radius: Style.radiusM
+            color: Color.mSurface
+            clip: true
+            z: 10
+
+            onVisibleChanged: visible ? previewVideo.play() : previewVideo.stop()
+
+            Video {
+                id: previewVideo
+                anchors.fill: parent
+                source: root.hoveredClipPath ? "file://" + root.hoveredClipPath : ""
+                fillMode: VideoOutput.PreserveAspectCrop
+                muted: true
+                loops: MediaPlayer.Infinite
+                autoPlay: false
+            }
+
+            // Spinner/icon while video is loading
+            NIcon {
+                anchors.centerIn: parent
+                visible: previewVideo.playbackState !== MediaPlayer.PlayingState
+                icon: "camera-video"
+                pointSize: Style.fontSizeXXL
+                color: Color.mOnSurfaceVariant
+            }
+
+            // Subtle border (painted on top so it overlays the video edges)
+            Rectangle {
+                anchors.fill: parent
+                radius: parent.radius
+                color: "transparent"
+                border.color: Color.mOutline
+                border.width: 1
             }
         }
     }

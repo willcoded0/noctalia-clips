@@ -26,6 +26,12 @@ Item {
     // Game metadata: { "/path/to/clip.mp4": "Elden Ring", ... }
     property var clipMeta: ({})
 
+    // Duration cache: { "/path/to/clip.mp4": "1:23", ... }
+    property var clipDurations: ({})
+
+    // Favorites: [ "/path/to/clip.mp4", ... ]
+    property var clipFavorites: []
+
     // New-clip indicator for the bar widget
     property bool hasNewClip: false
     property string latestClip: ""
@@ -46,9 +52,9 @@ Item {
     }
 
     function copyClip(path) {
-        // Copies the file path as plain text to the Wayland clipboard
+        // Copies the video file as a URI so it can be pasted into file managers
         Quickshell.execDetached(["sh", "-c",
-            "printf '%s' " + shellEscape(path) + " | wl-copy"])
+            "printf 'file://%s\\r\\n' " + shellEscape(path) + " | wl-copy --type=text/uri-list"])
     }
 
     function deleteClip(path) {
@@ -59,8 +65,16 @@ Item {
         var meta = Object.assign({}, root.clipMeta)
         delete meta[path]
         root.clipMeta = meta
+        // Clean up durations
+        var dur = Object.assign({}, root.clipDurations)
+        delete dur[path]
+        root.clipDurations = dur
+        // Clean up favorites
+        root.clipFavorites = root.clipFavorites.filter(f => f !== path)
         if (root.pluginApi) {
             root.pluginApi.pluginSettings.clipMeta = meta
+            root.pluginApi.pluginSettings.clipDurations = dur
+            root.pluginApi.pluginSettings.clipFavorites = root.clipFavorites.slice()
             root.pluginApi.saveSettings()
         }
     }
@@ -91,6 +105,82 @@ Item {
         root.pluginApi.saveSettings()
     }
 
+    function fetchDurations() {
+        if (root.clips.length === 0) return
+        // Build shell snippet: for each clip run ffprobe and output "path|seconds"
+        var paths = root.clips.map(p => shellEscape(p)).join(" ")
+        var cmd = "printf '%s\\n' " + paths +
+                  " | while IFS= read -r f; do" +
+                  " d=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 \"$f\" 2>/dev/null);" +
+                  " printf '%s|%s\\n' \"$f\" \"$d\";" +
+                  " done"
+        durationProc.running = false
+        durationProc.command = ["sh", "-c", cmd]
+        durationProc.running = true
+    }
+
+    function formatDuration(seconds) {
+        var s = Math.round(parseFloat(seconds))
+        if (isNaN(s) || s < 0) return ""
+        var h = Math.floor(s / 3600)
+        var m = Math.floor((s % 3600) / 60)
+        var sec = s % 60
+        if (h > 0)
+            return h + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0")
+        return m + ":" + String(sec).padStart(2, "0")
+    }
+
+    function toggleFavorite(path) {
+        var favs = root.clipFavorites.slice()
+        var idx = favs.indexOf(path)
+        if (idx >= 0)
+            favs.splice(idx, 1)
+        else
+            favs.unshift(path)
+        root.clipFavorites = favs
+        if (root.pluginApi) {
+            root.pluginApi.pluginSettings.clipFavorites = favs
+            root.pluginApi.saveSettings()
+        }
+    }
+
+    function renameClip(oldPath, newName) {
+        var dir = oldPath.substring(0, oldPath.lastIndexOf("/") + 1)
+        var newPath = dir + newName
+        // Optimistic update: reflect changes in all data structures immediately
+        root.clips = root.clips.map(c => c === oldPath ? newPath : c)
+        var meta = Object.assign({}, root.clipMeta)
+        if (meta[oldPath] !== undefined) {
+            meta[newPath] = meta[oldPath]
+            delete meta[oldPath]
+        }
+        root.clipMeta = meta
+        var dur = Object.assign({}, root.clipDurations)
+        if (dur[oldPath] !== undefined) {
+            dur[newPath] = dur[oldPath]
+            delete dur[oldPath]
+        }
+        root.clipDurations = dur
+        root.clipFavorites = root.clipFavorites.map(f => f === oldPath ? newPath : f)
+        if (root.pluginApi) {
+            root.pluginApi.pluginSettings.clipMeta = meta
+            root.pluginApi.pluginSettings.clipDurations = dur
+            root.pluginApi.pluginSettings.clipFavorites = root.clipFavorites.slice()
+            root.pluginApi.saveSettings()
+        }
+        renameProc.running = false
+        renameProc.command = ["mv", "--", oldPath, newPath]
+        renameProc.running = true
+    }
+
+    function trimClip(path) {
+        Quickshell.execDetached(["sh", "-c",
+            "if command -v losslesscut >/dev/null 2>&1; then losslesscut " + shellEscape(path) + "; " +
+            "elif command -v LosslessCut >/dev/null 2>&1; then LosslessCut " + shellEscape(path) + "; " +
+            "elif command -v kdenlive >/dev/null 2>&1; then kdenlive " + shellEscape(path) + "; " +
+            "else xdg-open " + shellEscape(path) + "; fi"])
+    }
+
     // ── Processes ─────────────────────────────────────────────────────────────
 
     Process {
@@ -106,12 +196,49 @@ Item {
             root.clips = root._scanBuffer.slice()
             root._scanBuffer = []
             root.ready = true
+            root.fetchDurations()
         }
     }
 
     Process {
         id: deleteProc
         running: false
+    }
+
+    Process {
+        id: durationProc
+        running: false
+        stdout: SplitParser {
+            onRead: line => {
+                var t = line.trim()
+                if (!t) return
+                var sep = t.lastIndexOf("|")
+                if (sep < 0) return
+                var path = t.substring(0, sep)
+                var secs = t.substring(sep + 1).trim()
+                var formatted = root.formatDuration(secs)
+                if (path && formatted) {
+                    var dur = Object.assign({}, root.clipDurations)
+                    dur[path] = formatted
+                    root.clipDurations = dur
+                }
+            }
+        }
+        onExited: {
+            if (root.pluginApi) {
+                root.pluginApi.pluginSettings.clipDurations = root.clipDurations
+                root.pluginApi.saveSettings()
+            }
+        }
+    }
+
+    Process {
+        id: renameProc
+        running: false
+        onExited: exitCode => {
+            // If the rename failed, refresh to restore the correct state
+            if (exitCode !== 0) root.refreshClips()
+        }
     }
 
     // ── IPC ───────────────────────────────────────────────────────────────────
@@ -127,8 +254,8 @@ Item {
             root.latestClip = filepath
             root.hasNewClip = true
             root.saveGameMeta(filepath, game)
+            root.fetchDurations()
             var basename = filepath.split("/").pop()
-            var label = game && game.trim() ? game.trim() : basename
             ToastService.showNotice(
                 "Clip saved" + (game && game.trim() ? " · " + game.trim() : ""),
                 basename,
@@ -152,12 +279,16 @@ Item {
 
     onPluginApiChanged: {
         if (pluginApi) {
-            root.clipMeta = pluginApi.pluginSettings?.clipMeta ?? ({})
+            root.clipMeta      = pluginApi.pluginSettings?.clipMeta      ?? ({})
+            root.clipDurations = pluginApi.pluginSettings?.clipDurations ?? ({})
+            root.clipFavorites = pluginApi.pluginSettings?.clipFavorites ?? []
         }
     }
 
     Component.onCompleted: {
-        root.clipMeta = pluginApi?.pluginSettings?.clipMeta ?? ({})
+        root.clipMeta      = pluginApi?.pluginSettings?.clipMeta      ?? ({})
+        root.clipDurations = pluginApi?.pluginSettings?.clipDurations ?? ({})
+        root.clipFavorites = pluginApi?.pluginSettings?.clipFavorites ?? []
         Quickshell.execDetached(["mkdir", "-p", root.cacheDir])
         refreshClips()
     }
