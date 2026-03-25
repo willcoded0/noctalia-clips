@@ -26,12 +26,21 @@ ColumnLayout {
         }
     }
 
+    Timer {
+        id: saveDebounce
+        interval: 500
+        repeat: false
+        onTriggered: {
+            if (!root.pluginApi) return
+            root.pluginApi.pluginSettings.clipsFolder = root.clipsFolder
+            root.pluginApi.pluginSettings.maxClips = root.maxClips
+            root.pluginApi.saveSettings()
+            root.pluginApi?.mainInstance?.refreshClips()
+        }
+    }
+
     function save() {
-        if (!pluginApi) return
-        pluginApi.pluginSettings.clipsFolder = root.clipsFolder
-        pluginApi.pluginSettings.maxClips = root.maxClips
-        pluginApi.saveSettings()
-        root.pluginApi?.mainInstance?.refreshClips()
+        saveDebounce.restart()
     }
 
     // ── Clips folder ──────────────────────────────────────────────────────────

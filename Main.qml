@@ -58,6 +58,8 @@ Item {
     }
 
     function deleteClip(path) {
+        var thumbName = path.split("/").pop().replace(/\.mp4$/i, "") + ".jpg"
+        Quickshell.execDetached(["rm", "-f", "--", root.cacheDir + thumbName])
         deleteProc.command = ["rm", "--", path]
         deleteProc.running = true
         root.clips = root.clips.filter(c => c !== path)
@@ -107,8 +109,10 @@ Item {
 
     function fetchDurations() {
         if (root.clips.length === 0) return
-        // Build shell snippet: for each clip run ffprobe and output "path|seconds"
-        var paths = root.clips.map(p => shellEscape(p)).join(" ")
+        // Only probe clips not already in the duration cache
+        var newClips = root.clips.filter(p => root.clipDurations[p] === undefined)
+        if (newClips.length === 0) return
+        var paths = newClips.map(p => shellEscape(p)).join(" ")
         var cmd = "printf '%s\\n' " + paths +
                   " | while IFS= read -r f; do" +
                   " d=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 \"$f\" 2>/dev/null);" +

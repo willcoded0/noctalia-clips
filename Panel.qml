@@ -567,8 +567,13 @@ Item {
                 source: root.hoveredClipPath ? "file://" + root.hoveredClipPath : ""
                 fillMode: VideoOutput.PreserveAspectCrop
                 muted: true
-                loops: MediaPlayer.Infinite
                 autoPlay: false
+                onPositionChanged: {
+                    if (position >= 30000) {
+                        seek(0)
+                        play()
+                    }
+                }
             }
 
             // Spinner/icon while video is loading
