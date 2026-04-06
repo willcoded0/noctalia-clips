@@ -1,0 +1,23 @@
+{
+  "id": "clips",
+  "name": "Clips",
+  "version": "1.0.0",
+  "minNoctaliaVersion": "3.6.0",
+  "author": "teao",
+  "license": "MIT",
+  "description": "Instant replay clip manager for gpu-screen-recorder. Press Super+K to save.",
+  "tags": ["Bar", "Panel", "System"],
+  "entryPoints": {
+    "main": "Main.qml",
+    "barWidget": "BarWidget.qml",
+    "panel": "Panel.qml",
+    "settings": "Settings.qml"
+  },
+  "dependencies": { "plugins": [] },
+  "metadata": {
+    "defaultSettings": {
+      "clipsFolder": "~/Videos",
+      "maxClips": 50
+    }
+  }
+}
