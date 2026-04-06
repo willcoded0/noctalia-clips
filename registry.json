@@ -1,0 +1,13 @@
+{
+  "plugins": [
+    {
+      "id": "clips",
+      "name": "Clips",
+      "version": "1.0.0",
+      "minNoctaliaVersion": "3.6.0",
+      "author": "teao",
+      "description": "Instant replay clip manager for gpu-screen-recorder. Press Super+K to save.",
+      "tags": ["Bar", "Panel", "System"]
+    }
+  ]
+}
